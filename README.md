@@ -258,7 +258,6 @@ python -m pytest
 - 测试位于 `tests/`，全部离线运行：HTTP / WebSocket / JS 签名均被替换为假实现
 - 每个测试使用临时 SQLite（`MYSTERY_DB_PATH` 环境变量覆盖库路径），不会触碰线上数据
 - 根目录的 `test_*.py` 是需真实 cookie 的手动联网脚本，不在 pytest 收集范围内（见 `pytest.ini`）
-- `xfail(strict=True)` 标记的用例记录了已知 bug，修复后需去掉标记
 
 ---
 

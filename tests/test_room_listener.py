@@ -121,13 +121,24 @@ def test_mystery_enter_is_resolved_and_saved(wl, run_room):
     assert (r['sec_uid'], r['real_name'], r['is_regular'], r['enter_count']) == ('SEC_ALICE_0001', 'RealAlice', 0, 1)
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: user_id_str 无 id 时返回 '?'（真值），"
-                                       "`user_id_str(user) or extra['unique_id']` 的回退永远走不到")
-def test_mystery_enter_falls_back_to_profile_unique_id(run_room):
-    user = make_user(display='神秘人12345', sec_uid='SEC_ALICE_0001')
-    _, events, _ = run_room([build_frame(member(user))],
+@pytest.mark.parametrize('frame_msg, event_type', [
+    (lambda u: member(u), 'mystery_enter'),
+    (lambda u: chat(u, 'hi'), 'mystery_chat'),
+    (lambda u: gift(u, '玫瑰', 1), 'mystery_gift'),
+])
+def test_mystery_falls_back_to_profile_unique_id(run_room, frame_msg, event_type):
+    user = make_user(display='神秘人12345', sec_uid='SEC_ALICE_0001')    # 无 display_id / short_id
+    _, events, _ = run_room([build_frame(frame_msg(user))],
                             profiles={'SEC_ALICE_0001': {'nickname': 'RealAlice', 'unique_id': 'alice01'}})
-    assert events[0]['data']['unique_id'] == 'alice01'
+    [ev] = events
+    assert ev['type'] == event_type and ev['data']['unique_id'] == 'alice01'
+
+
+def test_regular_user_without_id_does_not_store_placeholder(wl, run_room):
+    user = make_user(display='张三', nickname='张三', sec_uid='SEC_ZHANG_001')
+    _, events, _ = run_room([build_frame(chat(user, 'hi'))])
+    assert events[0]['data']['unique_id'] == ''
+    assert 'unique_id' not in db(wl, 'SELECT extra FROM mystery_records')[0]['extra']
 
 
 def test_mystery_whose_profile_name_equals_display_is_regular(wl, run_room):

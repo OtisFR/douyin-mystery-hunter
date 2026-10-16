@@ -116,16 +116,22 @@ def _save_mystery_record(room_id, sec_uid, display, real_name, extra, event_type
         if sec_uid:
             # 收集同一 sec_uid 所有旧记录的累积数据
             old_rows = conn.execute(
-                'SELECT real_name, extra, seen_room_ids, enter_count, gift_count, chat_count FROM mystery_records WHERE sec_uid=?',
+                'SELECT real_name, extra, seen_room_ids, enter_count, gift_count, chat_count, first_seen FROM mystery_records WHERE sec_uid=?',
                 (sec_uid,)
             ).fetchall()
-            
+            # display_names.first_seen 不会被覆盖，可修正旧版被重置过的 first_seen
+            dn_first = conn.execute(
+                'SELECT MIN(first_seen) FROM display_names WHERE sec_uid=? AND first_seen > 0',
+                (sec_uid,)
+            ).fetchone()[0]
+
             merged_seen = set()
             merged_enter = 0
             merged_gift = 0
             merged_chat = 0
             best_real_name = real_name
             merged_extra = dict(extra)
+            first_seen = min([t for t in [timestamp, dn_first] + [old[6] for old in old_rows] if t])
             for old in old_rows:
                 if old[2]:
                     for rid in old[2].split(','):
@@ -162,6 +168,7 @@ def _save_mystery_record(room_id, sec_uid, display, real_name, extra, event_type
             gift_count = 0
             chat_count = 0
             seen_room_ids = set()
+            first_seen = timestamp
         
         if room_id:
             seen_room_ids.add(str(room_id))
@@ -179,7 +186,7 @@ def _save_mystery_record(room_id, sec_uid, display, real_name, extra, event_type
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (sec_uid or '', display or '', real_name, extra_json,
               str(room_id) if room_id else '', seen_room_ids_str,
-              timestamp, timestamp, is_regular,
+              first_seen, timestamp, is_regular,
               enter_count + add_enter, gift_count + add_gift, chat_count + add_chat,
               room_nickname or ''))
         
@@ -290,6 +297,8 @@ def _load_history_by_nickname(nickname):
     """按直播间昵称查跨房间历史记录"""
     try:
         clean_name = nickname.replace(' ', '').lower()
+        if not clean_name:
+            return []
         conn = sqlite3.connect(_DB_PATH)
         conn.row_factory = sqlite3.Row
         cur = conn.execute('SELECT * FROM mystery_records WHERE is_regular = 0')
@@ -299,14 +308,15 @@ def _load_history_by_nickname(nickname):
         for r in all_rows:
             # 匹配 nickname 字段（line 184 存的 room_nickname）
             db_nick = (r.get('nickname') or '').replace(' ', '').lower()
-            match1 = (clean_name in db_nick or db_nick in clean_name)
+            # 空昵称不参与匹配（'' in 任意字符串 恒为 True）
+            match1 = bool(db_nick) and (clean_name in db_nick or db_nick in clean_name)
             # 匹配 extra JSON 中的 room_nickname（line 113 存）
             extra_str = r.get('extra') or '{}'
             match2 = False
             try:
                 extra = json.loads(extra_str) if isinstance(extra_str, str) else extra_str
                 extra_nick = (extra.get('room_nickname') or '').replace(' ', '').lower()
-                match2 = (clean_name in extra_nick or extra_nick in clean_name)
+                match2 = bool(extra_nick) and (clean_name in extra_nick or extra_nick in clean_name)
             except:
                 pass
             if match1 or match2:
@@ -369,9 +379,10 @@ def gender_str(g):
     return GENDER_MAP.get(g, '未知')
 
 def user_id_str(user):
+    """无 ID 时返回 ''，让调用方 / 前端的 extra.unique_id 回退生效"""
     return (getattr(user, 'unique_id', '') or
             getattr(user, 'display_id', '') or
-            str(user.short_id or '?'))
+            (str(user.short_id) if user.short_id else ''))
 
 def get_badge_level(user):
     try:
@@ -1549,10 +1560,10 @@ def _build_feed_events(room_id, limit=200):
 
         # 2. 从 mystery_records 生成 enter 事件
         cur2 = conn.execute('''
-            SELECT sec_uid, display, real_name, first_seen, enter_count, seen_room_ids
+            SELECT sec_uid, display, real_name, last_seen, enter_count, seen_room_ids
             FROM mystery_records
             WHERE enter_count > 0
-            ORDER BY first_seen ASC
+            ORDER BY last_seen ASC
         ''')
 
         for r in cur2.fetchall():
@@ -1565,7 +1576,8 @@ def _build_feed_events(room_id, limit=200):
                     'real_name': real_name,
                     'content': '',
                     'count': r['enter_count'],
-                    'timestamp': r['first_seen'],
+                    # 用 last_seen：回访用户的进场事件不应因 first_seen 很早而被 limit 截掉
+                    'timestamp': r['last_seen'],
                     'sec_uid': r['sec_uid'] or '',
                 })
 

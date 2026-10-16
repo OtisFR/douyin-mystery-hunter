@@ -37,7 +37,7 @@ def test_gender_str(wl, g, s):
 def test_user_id_str_prefers_display_id(wl):
     assert wl.user_id_str(make_user(display_id='dy_abc', short_id=123)) == 'dy_abc'
     assert wl.user_id_str(make_user(short_id=123)) == '123'
-    assert wl.user_id_str(make_user()) == '?'
+    assert wl.user_id_str(make_user()) == ''        # 空串，调用方才能回退到 extra.unique_id
 
 
 def test_get_badge_level_reads_and_caches(wl):

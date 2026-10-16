@@ -1,8 +1,6 @@
 """SQLite 持久化：保存/合并/加载/公屏事件"""
 import json
-import time
-
-import pytest
+import sqlite3
 
 from tests.helpers import rows
 
@@ -64,9 +62,27 @@ def test_save_private_room_marks_regular_and_skips_display_names(wl):
     assert displays(wl, 'SEC_P') == {}
 
 
-@pytest.mark.xfail(strict=True, reason='BUG: 每次保存都先 DELETE 再 INSERT，first_seen 被重置为本次时间')
 def test_save_preserves_first_seen(wl):
     wl._save_mystery_record('r1', 'SEC_A', '神秘人001', '', {}, 'enter', timestamp=1000)
+    wl._save_mystery_record('r2', 'SEC_A', 'dou123456', '', {}, 'chat', timestamp=2000)
+    [r] = records(wl)
+    assert (r['first_seen'], r['last_seen']) == (1000, 2000)
+
+
+def test_save_preserves_first_seen_in_private_room(wl):
+    # 私密房不写 display_names，只能靠 mystery_records 自身的 first_seen
+    wl._save_mystery_record('r1', 'SEC_P', '神秘人001', '', {}, 'gift', timestamp=1000, is_private=True)
+    wl._save_mystery_record('r1', 'SEC_P', '神秘人001', '', {}, 'gift', timestamp=2000, is_private=True)
+    assert records(wl)[0]['first_seen'] == 1000
+
+
+def test_save_repairs_reset_first_seen_from_display_names(wl):
+    """旧版 bug 已把 first_seen 重置过的数据，下次保存时从 display_names 修正"""
+    wl._save_mystery_record('r1', 'SEC_A', '神秘人001', '', {}, 'enter', timestamp=1000)
+    conn = sqlite3.connect(wl._DB_PATH)
+    conn.execute('UPDATE mystery_records SET first_seen = 1500')
+    conn.commit()
+    conn.close()
     wl._save_mystery_record('r1', 'SEC_A', '神秘人001', '', {}, 'chat', timestamp=2000)
     assert records(wl)[0]['first_seen'] == 1000
 
@@ -114,10 +130,25 @@ def test_load_history_by_nickname_case_and_space_insensitive(wl):
     assert wl._load_history_by_nickname('不存在的主播') == []
 
 
-@pytest.mark.xfail(strict=True, reason="BUG: 昵称为空的记录 `'' in clean_name` 恒为 True，会匹配任何查询")
 def test_load_history_by_nickname_ignores_records_without_nickname(wl):
     wl._save_mystery_record('r1', 'SEC_A', '神秘人001', 'Alice', {}, 'enter')   # 无 room_nickname
-    assert wl._load_history_by_nickname('LuckyStar') == []
+    wl._save_mystery_record('r2', 'SEC_B', '神秘人002', 'Bob', {}, 'enter', room_nickname='LuckyStar')
+    assert [r['sec_uid'] for r in wl._load_history_by_nickname('LuckyStar')] == ['SEC_B']
+
+
+def test_load_history_by_nickname_matches_extra_room_nickname_only(wl):
+    # 只有 extra.room_nickname、nickname 列为空（旧数据）也能命中
+    wl._save_mystery_record('r1', 'SEC_A', '神秘人001', 'Alice', {}, 'enter')
+    conn = sqlite3.connect(wl._DB_PATH)
+    conn.execute("""UPDATE mystery_records SET extra = '{"room_nickname": "LuckyStar"}'""")
+    conn.commit()
+    conn.close()
+    assert [r['sec_uid'] for r in wl._load_history_by_nickname('lucky star')] == ['SEC_A']
+
+
+def test_load_history_by_nickname_blank_query(wl):
+    wl._save_mystery_record('r1', 'SEC_A', '神秘人001', 'Alice', {}, 'enter', room_nickname='LuckyStar')
+    assert wl._load_history_by_nickname('   ') == []
 
 
 # ---------- _build_feed_events ----------
@@ -134,6 +165,16 @@ def test_build_feed_events_merges_and_orders(wl):
     assert [(e['type'], e['timestamp']) for e in events] == [('enter', 100), ('gift', 200), ('chat', 300)]
     assert events[0]['real_name'] == 'Alice' and events[0]['count'] == 1
     assert events[1]['content'] == '小心心' and events[1]['count'] == 3
+
+
+def test_build_feed_events_returning_user_enter_uses_last_seen(wl):
+    wl._save_mystery_record('r1', 'SEC_A', '神秘人001', 'Alice', {}, 'enter', timestamp=1000)
+    for ts in range(2000, 2250):
+        wl._save_interaction('r1', 'SEC_B', 'x', 'chat', 'spam', timestamp=ts)
+    wl._save_mystery_record('r1', 'SEC_A', '神秘人001', 'Alice', {}, 'enter', timestamp=3000)
+    events = wl._build_feed_events('r1')            # 默认 limit=200
+    assert events[-1] == {'type': 'enter', 'display': '神秘人001', 'real_name': 'Alice', 'content': '',
+                          'count': 2, 'timestamp': 3000, 'sec_uid': 'SEC_A'}
 
 
 def test_build_feed_events_limit_keeps_latest_in_ascending_order(wl):
