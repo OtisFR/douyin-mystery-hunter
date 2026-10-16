@@ -78,6 +78,37 @@ def test_start_replays_room_history(client, wl, no_thread):
     assert events[1]['data']['real_name'] == '神秘人002'      # 无真实名时回退 display
 
 
+def test_start_replay_filters_room_before_limit(client, wl, no_thread):
+    # 其他房间 >100 条且 first_seen 更早：旧实现先全局 LIMIT 100 再过滤，目标房间会被挤掉
+    for i in range(120):
+        wl._save_mystery_record('r2', f'SEC_X{i}', f'神秘人X{i}', '', {}, 'enter', timestamp=i + 1)
+    wl._save_mystery_record('r12', 'SEC_SUB', '神秘人S', '', {}, 'enter', timestamp=500)   # 'r1' 不能子串命中 'r12'
+    wl._save_mystery_record('r2', 'SEC_B', '神秘人B', '', {}, 'enter', timestamp=1001)
+    wl._save_mystery_record('r1', 'SEC_B', '神秘人B', '', {}, 'enter', timestamp=1002)    # 跨房间用户
+    wl._save_mystery_record('r1', 'SEC_A', '神秘人A', '', {}, 'enter', timestamp=1000)
+    wl._save_mystery_record('r1', 'SEC_C', '神秘人C', '', {}, 'enter', timestamp=1003)
+
+    client.post('/api/start', json={'room_id': 'r1'})
+    listener = wl.listeners['r1']
+    data = [e['data'] for e in drain(listener.events)]
+    assert [d['sec_uid'] for d in data] == ['SEC_A', 'SEC_B', 'SEC_C']   # 按 first_seen 升序
+    assert [d['mystery_seq'] for d in data] == [1, 2, 3]
+    assert listener.mystery_count == 3
+
+
+def test_start_replay_keeps_most_recent_100(client, wl, no_thread):
+    for i in range(102):
+        wl._save_mystery_record('r1', f'SEC_{i}', f'神秘人{i}', '', {}, 'enter', timestamp=i + 1)
+    wl._save_mystery_record('r1', 'SEC_0', '神秘人0', '', {}, 'enter', timestamp=500)    # 老用户回访：first_seen 不变
+
+    client.post('/api/start', json={'room_id': 'r1'})
+    listener = wl.listeners['r1']
+    uids = [e['data']['sec_uid'] for e in drain(listener.events)]
+    # 按 last_seen 保留最近活跃的 100 人，输出仍按 first_seen 升序
+    assert uids == ['SEC_0'] + [f'SEC_{i}' for i in range(3, 102)]
+    assert listener.mystery_count == 100
+
+
 def test_start_already_running(client, wl, no_thread):
     add_listener(wl, 'r1')
     assert client.post('/api/start', json={'room_id': 'r1'}).get_json() == {

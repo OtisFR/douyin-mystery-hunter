@@ -966,19 +966,19 @@ def start_listen():
     try:
         conn = sqlite3.connect(_DB_PATH)
         conn.row_factory = sqlite3.Row
+        # 先按房间过滤再 LIMIT（seen_room_ids 两侧补逗号精确匹配，'12' 不会命中 '123'）；
+        # 保留最近活跃的 100 人，输出仍按 first_seen 升序（与 mystery_seq 一致）
         cur = conn.execute('''
-            SELECT * FROM mystery_records
-            WHERE is_regular = 0
+            SELECT * FROM (
+                SELECT * FROM mystery_records
+                WHERE is_regular = 0
+                  AND instr(',' || seen_room_ids || ',', ',' || ? || ',') > 0
+                ORDER BY last_seen DESC
+                LIMIT 100
+            )
             ORDER BY first_seen ASC
-            LIMIT 100
-        ''')
-        all_db = [dict(r) for r in cur.fetchall()]
-        # 过滤：seen_room_ids 包含当前 room_id
-        db_records = []
-        for r in all_db:
-            seen = (r.get('seen_room_ids') or '').split(',')
-            if str(room_id) in seen:
-                db_records.append(r)
+        ''', (str(room_id),))
+        db_records = [dict(r) for r in cur.fetchall()]
         conn.close()
         
         seq = 0
