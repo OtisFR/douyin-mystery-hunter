@@ -245,6 +245,23 @@ WebSocket 消息流
 
 ---
 
+## 🧪 测试
+
+```bash
+pip install -r requirements-dev.txt
+# protobuf-to-dict 在 Python 3 需打补丁（同 Dockerfile）
+sed -i -e 's/\blong\b/int/g' -e 's/\bunicode\b/str/g' \
+    "$(python -c 'import site;print(site.getsitepackages()[0])')/protobuf_to_dict.py"
+python -m pytest
+```
+
+- 测试位于 `tests/`，全部离线运行：HTTP / WebSocket / JS 签名均被替换为假实现
+- 每个测试使用临时 SQLite（`MYSTERY_DB_PATH` 环境变量覆盖库路径），不会触碰线上数据
+- 根目录的 `test_*.py` 是需真实 cookie 的手动联网脚本，不在 pytest 收集范围内（见 `pytest.ini`）
+- `xfail(strict=True)` 标记的用例记录了已知 bug，修复后需去掉标记
+
+---
+
 ## ⚠️ 已知限制
 
 1. **同时监听上限默认为 3 个**，搜索 `MAX_ROOMS` 修改

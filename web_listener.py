@@ -31,7 +31,7 @@ _private_name_cache = {}  # (room_id:display) -> real_nickname, 私密直播间�
 
 # ========== SQLite 持久化 ==========
 import sqlite3
-_DB_PATH = '/home/admin/douyin-mystery-hunter/mystery_history.db'
+_DB_PATH = os.environ.get('MYSTERY_DB_PATH', '/home/admin/douyin-mystery-hunter/mystery_history.db')
 
 def _init_db():
     conn = sqlite3.connect(_DB_PATH)
